@@ -13,10 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Buildozer 1.6.0 (2026-05-11) and p4a v2026.05.09 are a matched pair.
-  # Bump them together, never one alone.
   BUILDOZER_VERSION: "1.6.0"
-  P4A_TAG: "v2026.05.09"
+  # p4a "develop", NOT the v2026.05.09 tag. That release resolves
+  # charset-normalizer (pulled in by the Kivy recipe's requests dependency) to
+  # its Android wheel, then installs it with host pip, which rejects it:
+  #   ERROR: charset_normalizer-...-android_24_arm64_v8a.whl
+  #          is not a supported wheel on this platform
+  # Fixed upstream in python-for-android#3366, which is on develop.
+  # develop is a moving branch, so this job refreshes it on every run.
+  P4A_REF: "develop"
   CYTHON_VERSION: "0.29.36"
 
 jobs:
@@ -55,32 +60,50 @@ jobs:
             "cython==${CYTHON_VERSION}" \
             virtualenv
 
+      # Belt and braces for the charset-normalizer failure above, in case
+      # develop regresses. charset-normalizer only began publishing Android
+      # wheels at 3.5.0, so pinning below that leaves only the universal wheel
+      # and p4a cannot select a platform wheel it is unable to install.
+      # 3.3.2 still satisfies Kivy's charset-normalizer>=3.0.0.
+      # Unlike buildozer.spec requirements, PIP_CONSTRAINT does govern the
+      # resolution step p4a uses.
+      - name: Write pip constraints
+        run: echo "charset-normalizer==3.3.2" > "${GITHUB_WORKSPACE}/constraints.txt"
+
       # Holds the Android SDK/NDK and the p4a checkout (several GB).
       # Without this, every run redownloads them and rebuilds CPython: ~45 min.
       - name: Cache Buildozer SDK/NDK and p4a
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_TAG }}-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_REF }}-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_TAG }}-
+            buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_REF }}-
 
-      # THE ACTUAL FIX for:
-      #   ImportError: cannot import name 'open_rich_spinner'
-      #                from 'pip._internal.cli.spinners'
-      # p4a's run_pymodules_install upgrades pip from inside the venv it is
-      # running from. The upgrade half-rewrites the pip package, so the next
-      # import mixes new build_env code with old cli/spinners code and dies.
-      # We pre-clone p4a where buildozer expects it and disable that upgrade.
+      # Two jobs here:
+      #  1. Keep the cached p4a checkout current with P4A_REF. The cache can
+      #     restore a weeks-old develop, which would miss the fix above.
+      #  2. Patch out p4a's pip self-upgrade. run_pymodules_install upgrades pip
+      #     from inside the venv it is running from; the upgrade half-rewrites
+      #     the pip package, so the next import mixes new build_env code with
+      #     old cli/spinners code and fails with:
+      #       ImportError: cannot import name 'open_rich_spinner'
+      #                    from 'pip._internal.cli.spinners'
+      #     The patch is idempotent and only warns if upstream has dropped the
+      #     line, so it is safe to leave in place after an upstream fix.
       - name: Fetch and patch python-for-android
         run: |
           set -eu
           P4A_DIR="$HOME/.buildozer/android/platform/python-for-android"
-          if [ ! -d "$P4A_DIR/.git" ]; then
+          if [ -d "$P4A_DIR/.git" ]; then
+            git -C "$P4A_DIR" fetch --depth 1 origin "${P4A_REF}"
+            git -C "$P4A_DIR" reset --hard FETCH_HEAD
+          else
             mkdir -p "$(dirname "$P4A_DIR")"
-            git clone --depth 1 --branch "${P4A_TAG}" \
+            git clone --depth 1 --branch "${P4A_REF}" \
               https://github.com/kivy/python-for-android.git "$P4A_DIR"
           fi
+          git -C "$P4A_DIR" log -1 --oneline
           python3 - "$P4A_DIR/pythonforandroid/build.py" <<'PY'
           import re
           import sys
@@ -130,6 +153,8 @@ jobs:
           PY
 
       - name: Build APK
+        env:
+          PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt
         run: |
           set -eu
           source .venv/bin/activate
