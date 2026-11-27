@@ -38,11 +38,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Gradle 8.x + the Android Gradle Plugin need Java 17. The ubuntu-22.04
+      # runner ships Temurin 11, 17 and 21 but points JAVA_HOME at 11, and
+      # apt-installing a JDK does NOT move JAVA_HOME -- which is why Gradle kept
+      # resolving /usr/lib/jvm/temurin-11-jdk-amd64 and failing to apply the
+      # plugin. setup-java is what actually sets JAVA_HOME for the whole job.
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # No JDK here on purpose: setup-java above owns the Java toolchain.
           sudo apt-get install -y --no-install-recommends \
-            git zip unzip openjdk-17-jdk \
+            git zip unzip \
             autoconf automake libtool libltdl-dev pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev patch ccache
@@ -158,6 +170,9 @@ jobs:
         run: |
           set -eu
           source .venv/bin/activate
+          # Confirm Gradle will get Java 17, not the runner's default 11.
+          echo "JAVA_HOME=${JAVA_HOME}"
+          java -version
           # Buildozer skips its "pip install --user" bootstrap (which fails in a
           # venv) only when VIRTUAL_ENV is exported. activate does that for us.
           # stdin is closed so any unexpected prompt fails fast instead of
