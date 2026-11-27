@@ -1,17 +1,18 @@
 from kivy.app import App
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.checkbox import CheckBox
 from kivy.uix.button import Button
+from kivy.uix.checkbox import CheckBox
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 
+
 class TodoApp(App):
     def build(self):
-        root=BoxLayout(orientation="vertical",padding=dp(16),spacing=dp(12))
+        root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
 
-        title=Label(
+        title = Label(
             text="My To-Do List",
             font_size=dp(24),
             bold=True,
@@ -20,15 +21,17 @@ class TodoApp(App):
         )
         root.add_widget(title)
 
-        input_row=BoxLayout(size_hit_y=None,height=dp(48),spacing=dp(8))
-        self.task_input=TextInput(
+        # Input row
+        input_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        self.task_input = TextInput(
             hint_text="What needs to be done?",
             multiline=False,
             font_size=dp(16),
-            padding=[dp(10),dp(12)],
+            padding=[dp(10), dp(12)],
         )
-        self.task_input.bind(on_text_validate=self.add_text)
-        add_btn=Button(
+        self.task_input.bind(on_text_validate=self.add_task)
+
+        add_btn = Button(
             text="Add",
             size_hint_x=None,
             width=dp(80),
@@ -37,27 +40,30 @@ class TodoApp(App):
         )
         input_row.add_widget(self.task_input)
         input_row.add_widget(add_btn)
+        root.add_widget(input_row)
 
-        scroll=ScrollView()
-        self.task_input=BoxLayout(
+        # Scrollable task list
+        scroll = ScrollView()
+        self.tasks_list = BoxLayout(
             orientation="vertical",
             spacing=dp(8),
-            size_hint_y=None
+            size_hint_y=None,
         )
-        self.task_list.bind(minimum_height=self.task_list.setter("height"))
-        scroll.add_widget(self.task_list)
+        self.tasks_list.bind(minimum_height=self.tasks_list.setter("height"))
+        scroll.add_widget(self.tasks_list)
         root.add_widget(scroll)
 
         return root
-    def add_task(self,*args):
-        text=self.task_input.text.strip()
+
+    def add_task(self, *args):
+        text = self.task_input.text.strip()
         if not text:
             return
 
-        row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
+        row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
 
-        checkbox=CheckBox(size_hint_x=None,width=dp(40))
-        label=Label(
+        checkbox = CheckBox(size_hint_x=None, width=dp(40))
+        label = Label(
             text=text,
             font_size=dp(16),
             halign="left",
@@ -65,20 +71,21 @@ class TodoApp(App):
         )
         label.bind(size=label.setter("text_size"))
 
-        delete_btn=Button(
+        delete_btn = Button(
             text="X",
             size_hint_x=None,
             width=dp(44),
-            background_color=(0.85,0.25,0.25,1),
-            on_release=lambda btn:self.task_list.remove_widget(row),
+            background_color=(0.85, 0.25, 0.25, 1),
+            on_release=lambda btn: self.tasks_list.remove_widget(row),
         )
+
         row.add_widget(checkbox)
         row.add_widget(label)
         row.add_widget(delete_btn)
 
-        self.task_list.add_widget(row)
-        self.task_input.text=""
+        self.tasks_list.add_widget(row)
+        self.task_input.text = ""
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     TodoApp().run()
-
