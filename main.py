@@ -28,6 +28,7 @@ class TaskRow(BoxLayout):
         self.task_text=text
         self.on_change=on_change
         self.on_delete=on_delete
+        self.height=ROW_MIN_HEIGHT
 
         self.checkbox=CheckBox(size_hint_x=None,width=dp(40),active=bool(done))
         self.checkbox.bind(active=self._toggled)
@@ -37,10 +38,10 @@ class TaskRow(BoxLayout):
             halign="left",
             valign="middle",
             markup=True,
-            size_hint=None,
-            markup=ROW_MIN_HEIGHT,
+            size_hint_y=None,
+            height=ROW_MIN_HEIGHT,
         )
-        self.label.bind(width=self.label_width,texture_size=self.label_texture)
+        self.label.bind(width=self._label_width,texture_size=self._label_texture)
 
         delete_btn=Button(
             text="X",
@@ -70,10 +71,9 @@ class TaskRow(BoxLayout):
         self._render()
         if self._on_change:
             self._on_change()
-    def _deleted_pressed(self,*_):
+    def _delete_pressed(self,*_):
         if self._on_delete:
             self._on_delete(self)
-
     def _render(self):
         safe=escape_markup(self.task_text)
         if self.done:
@@ -163,6 +163,9 @@ class TodoApp(App):
         self.tasks_list.add_widget(
             TaskRow(text,done,on_change=self.save,on_delete=self._delete_row)
         )
+    def _delete_row(self,row):
+        self.tasks_list.remove_widget(row)
+        self.save()
     def add_task(self,*_):
         text=self.task_input.text.strip()
         if not text:
