@@ -5,9 +5,25 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Buildozer 1.6.0 (2026-05-11) and p4a v2026.05.09 are a matched pair.
+  # Bump them together, never one alone.
+  BUILDOZER_VERSION: "1.6.0"
+  P4A_TAG: "v2026.05.09"
+  CYTHON_VERSION: "0.29.36"
+
 jobs:
   build-apk:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,25 +36,125 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             git zip unzip openjdk-17-jdk \
-            autoconf libtool pkg-config zlib1g-dev libncurses5-dev \
-            libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+            autoconf automake libtool libltdl-dev pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev patch ccache
 
       - name: Install Buildozer and Cython
         run: |
+          set -eu
           python -m venv .venv
           source .venv/bin/activate
-          pip install "pip<25" setuptools wheel
-          pip install buildozer cython==0.29.36
+          # NOTE: no "pip<25" pin. That pin never touched the venv that was
+          # actually failing, and it risks breaking buildozer's own install.
+          python -m pip install --upgrade pip setuptools wheel
+          pip install \
+            "buildozer==${BUILDOZER_VERSION}" \
+            "cython==${CYTHON_VERSION}" \
+            virtualenv
+
+      # Holds the Android SDK/NDK and the p4a checkout (several GB).
+      # Without this, every run redownloads them and rebuilds CPython: ~45 min.
+      - name: Cache Buildozer SDK/NDK and p4a
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_TAG }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-${{ runner.os }}-${{ env.BUILDOZER_VERSION }}-${{ env.P4A_TAG }}-
+
+      # THE ACTUAL FIX for:
+      #   ImportError: cannot import name 'open_rich_spinner'
+      #                from 'pip._internal.cli.spinners'
+      # p4a's run_pymodules_install upgrades pip from inside the venv it is
+      # running from. The upgrade half-rewrites the pip package, so the next
+      # import mixes new build_env code with old cli/spinners code and dies.
+      # We pre-clone p4a where buildozer expects it and disable that upgrade.
+      - name: Fetch and patch python-for-android
+        run: |
+          set -eu
+          P4A_DIR="$HOME/.buildozer/android/platform/python-for-android"
+          if [ ! -d "$P4A_DIR/.git" ]; then
+            mkdir -p "$(dirname "$P4A_DIR")"
+            git clone --depth 1 --branch "${P4A_TAG}" \
+              https://github.com/kivy/python-for-android.git "$P4A_DIR"
+          fi
+          python3 - "$P4A_DIR/pythonforandroid/build.py" <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+          marker = "buildozer-ci: pip self-upgrade disabled"
+
+          with open(path, encoding="utf-8") as fh:
+              src = fh.read()
+
+          if marker in src:
+              print("Already patched: %s" % path)
+              sys.exit(0)
+
+          lines = src.splitlines(keepends=True)
+          pattern = re.compile(r"'install'\s*,\s*'-U'\s*,\s*'pip'")
+          hit = next((i for i, line in enumerate(lines) if pattern.search(line)), None)
+
+          if hit is None:
+              print("::warning::No pip self-upgrade call found in %s. "
+                    "Upstream may have fixed it; if the build still fails with "
+                    "open_rich_spinner, update this patch." % path)
+              sys.exit(0)
+
+          # Walk back to the start of the statement, then forward to its close.
+          start = hit
+          while start >= 0 and "shprint(" not in lines[start]:
+              start -= 1
+          if start < 0:
+              start = hit
+
+          depth = 0
+          end = start
+          for i in range(start, len(lines)):
+              depth += lines[i].count("(") - lines[i].count(")")
+              end = i
+              if depth <= 0:
+                  break
+
+          indent = re.match(r"\s*", lines[start]).group(0)
+          lines[start:end + 1] = ["%spass  # %s\n" % (indent, marker)]
+
+          with open(path, "w", encoding="utf-8") as fh:
+              fh.write("".join(lines))
+
+          print("Patched %s (lines %d-%d)" % (path, start + 1, end + 1))
+          PY
 
       - name: Build APK
         run: |
+          set -eu
           source .venv/bin/activate
-          yes | buildozer android debug
+          # Buildozer skips its "pip install --user" bootstrap (which fails in a
+          # venv) only when VIRTUAL_ENV is exported. activate does that for us.
+          # stdin is closed so any unexpected prompt fails fast instead of
+          # hanging for the full timeout.
+          buildozer android debug < /dev/null
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: kivy-todo-apk
           path: bin/*.apk
+          if-no-files-found: error
+
+      # Runs even when the build fails, so a failure leaves you something to read.
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-logs
+          path: |
+            .buildozer/android/platform/build-*/build.log
+            .buildozer/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
