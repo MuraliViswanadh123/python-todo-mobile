@@ -1,0 +1,5 @@
+build.log
+.buildozer/
+bin/
+.venv/
+__pycache__/
