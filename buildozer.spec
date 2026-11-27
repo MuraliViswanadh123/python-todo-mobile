@@ -9,17 +9,17 @@ source.include_exts = py,png,jpg,kv,atlas
 
 version = 0.1
 
-# Only what the app actually imports.
+# Only python3 and kivy are listed here.
 #
-# Changes from the previous spec:
-#   * dropped python3==3.11.5 / hostpython3==3.11.5. The p4a recipe carries
-#     version-specific patches; forcing a CPython version the installed p4a
-#     was not written for is a classic source of opaque build failures.
-#     Buildozer 1.6 picks the Python version its p4a actually supports.
-#   * dropped charset-normalizer. Nothing here imports it (it only arrives via
-#     `requests`), and charset-normalizer >= 3 ships a C extension that needs a
-#     p4a recipe, so a "<3.5" bound does not make it safe. If you ever do need
-#     it, pin the last pure-Python release: charset-normalizer==2.1.1
+# Note: charset-normalizer is NOT listed but is still built. The Kivy recipe
+# depends on requests, which pulls it in transitively. Listing it here (pinned
+# or not) would not control it either: p4a strips the version and re-resolves
+# the package in a separate step. The way to constrain it is the PIP_CONSTRAINT
+# file the CI workflow writes.
+#
+# python3/hostpython3 are deliberately unpinned. The p4a recipe carries
+# version-specific patches; forcing a CPython version the installed p4a was not
+# written for is a classic source of opaque build failures.
 requirements = python3,kivy
 
 orientation = portrait
@@ -34,8 +34,8 @@ android.minapi = 24
 android.ndk_api = 24
 
 # android.ndk is deliberately NOT pinned. The old "25b" pin was paired with an
-# unpinned p4a, which is the mismatch that bites. The CI workflow pins p4a to a
-# tag instead and lets buildozer choose the NDK that tag expects.
+# unpinned p4a, which is the mismatch that bites. Let buildozer choose the NDK
+# that its p4a expects.
 
 # Debug CI builds target one ABI to halve build time.
 # For a Play Store release add: arm64-v8a, armeabi-v7a
@@ -47,9 +47,13 @@ android.allow_backup = True
 # and will hang (or EOF-fail) a CI build without this.
 android.accept_sdk_license = True
 
-# Pin python-for-android to a release tag so an upstream commit cannot break
-# main overnight. Keep this in step with BUILDOZER_VERSION in the workflow.
-p4a.branch = v2026.05.09
+# "develop", NOT the v2026.05.09 tag. That release resolves charset-normalizer
+# to its Android wheel, then installs it with host pip, which rejects it:
+#   ERROR: charset_normalizer-...-android_24_arm64_v8a.whl
+#          is not a supported wheel on this platform
+# Fixed upstream in python-for-android#3366, which is on develop.
+# This must match P4A_REF in .github/workflows/build-apk.yml.
+p4a.branch = develop
 
 [buildozer]
 
